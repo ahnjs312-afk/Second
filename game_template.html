@@ -157,7 +157,11 @@
     groundCapLeft: [1, 0],
     groundMid: [2, 0],
     groundCapRight: [3, 0],
-    groundFill: [0, 6],
+    fillCore: [0, 6],
+    bottomIsolated: [0, 7],
+    bottomCapLeft: [1, 7],
+    bottomMid: [2, 7],
+    bottomCapRight: [3, 7],
     spike: [4, 3],
     coin: [11, 7],
     flagA: [11, 5],
@@ -252,31 +256,39 @@
     off.height = lvl.R * TILE_ART;
     var octx = off.getContext("2d");
     octx.imageSmoothingEnabled = false;
-    var midColor = sampleTilesetColor(SPR.groundMid[0] * TILE_SRC + 1, SPR.groundMid[1] * TILE_SRC + 1);
-    var fillColor = sampleTilesetColor(SPR.groundFill[0] * TILE_SRC + 1, SPR.groundFill[1] * TILE_SRC + 1);
+    // every rounded corner in the ground tileset is outlined in this same
+    // border color, so one sample backfills any of them safely
+    var borderColor = sampleTilesetColor(SPR.groundMid[0] * TILE_SRC + 1, SPR.groundMid[1] * TILE_SRC + 1);
+
+    function pickPiece(set, leftSolid, rightSolid) {
+      if (leftSolid && rightSolid) return set.mid;
+      if (!leftSolid && rightSolid) return set.capLeft;
+      if (leftSolid && !rightSolid) return set.capRight;
+      return set.isolated;
+    }
+    var TOP_SET = { isolated: SPR.groundIsolated, capLeft: SPR.groundCapLeft, mid: SPR.groundMid, capRight: SPR.groundCapRight };
+    var BOTTOM_SET = { isolated: SPR.bottomIsolated, capLeft: SPR.bottomCapLeft, mid: SPR.bottomMid, capRight: SPR.bottomCapRight };
+
     for (var r = 0; r < lvl.R; r++) {
       for (var c = 0; c < lvl.C; c++) {
         if (!lvl.solid[r][c]) continue;
-        var above = r > 0 ? lvl.solid[r - 1][c] : false;
+        var above = r > 0 && lvl.solid[r - 1][c];
+        var below = r < lvl.R - 1 && lvl.solid[r + 1][c];
+        var leftSolid = c > 0 && lvl.solid[r][c - 1];
+        var rightSolid = c < lvl.C - 1 && lvl.solid[r][c + 1];
+
+        // the tileset ships proper left-cap / middle / right-cap / isolated
+        // sets for BOTH the exposed top surface and the exposed underside
+        // (only their end pieces have rounded outer corners); a tile with
+        // ground on every side just uses the always-flush core fill piece
         var spr;
-        if (above) {
-          spr = SPR.groundFill;
-        } else {
-          // the tileset has a proper left-cap / middle / right-cap / isolated
-          // set for surface tiles (only their end pieces have rounded outer
-          // corners); pick the piece that matches how this run continues so
-          // interior tiles are flush by construction, not just backfilled
-          var leftSolid = c > 0 && lvl.solid[r][c - 1];
-          var rightSolid = c < lvl.C - 1 && lvl.solid[r][c + 1];
-          if (leftSolid && rightSolid) spr = SPR.groundMid;
-          else if (!leftSolid && rightSolid) spr = SPR.groundCapLeft;
-          else if (leftSolid && !rightSolid) spr = SPR.groundCapRight;
-          else spr = SPR.groundIsolated;
-        }
-        // backfill too, as a safety net for any edge (like a cap's rounded
-        // outer corner, or its non-flush bottom against the fill row below)
-        // that still isn't flush against its neighbor
-        octx.fillStyle = above ? fillColor : midColor;
+        if (!above) spr = pickPiece(TOP_SET, leftSolid, rightSolid);
+        else if (!below) spr = pickPiece(BOTTOM_SET, leftSolid, rightSolid);
+        else spr = SPR.fillCore;
+
+        // backfill first, as a safety net for any edge (a cap's rounded
+        // outer corner, say) that still isn't flush against its neighbor
+        octx.fillStyle = borderColor;
         octx.fillRect(c * TILE_ART, r * TILE_ART, TILE_ART, TILE_ART);
         octx.drawImage(
           tilesetImg,
