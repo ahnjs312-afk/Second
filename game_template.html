@@ -259,6 +259,12 @@
     // every rounded corner in the ground tileset is outlined in this same
     // border color, so one sample backfills any of them safely
     var borderColor = sampleTilesetColor(SPR.groundMid[0] * TILE_SRC + 1, SPR.groundMid[1] * TILE_SRC + 1);
+    // the top piece also has its own ~2px outline baked into its bottom edge
+    // (meant for it to stand alone); when another ground tile continues
+    // directly below, sample its interior fill so that outline can be
+    // painted over and the two rows read as one seamless block
+    var dirtColor = sampleTilesetColor(SPR.bottomMid[0] * TILE_SRC + 1, SPR.bottomMid[1] * TILE_SRC + 1);
+    var GROUND_BORDER_PX = 2;
 
     function pickPiece(set, leftSolid, rightSolid) {
       if (leftSolid && rightSolid) return set.mid;
@@ -295,6 +301,14 @@
           spr[0] * TILE_SRC, spr[1] * TILE_SRC, TILE_ART, TILE_ART,
           c * TILE_ART, r * TILE_ART, TILE_ART, TILE_ART
         );
+
+        if (!above && below) {
+          octx.fillStyle = dirtColor;
+          octx.fillRect(
+            c * TILE_ART, r * TILE_ART + TILE_ART - GROUND_BORDER_PX,
+            TILE_ART, GROUND_BORDER_PX
+          );
+        }
       }
     }
     return off;
