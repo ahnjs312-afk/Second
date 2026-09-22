@@ -49,7 +49,6 @@
     padding: 8px 10px;
     background: #2b3a55;
   }
-  .dpad { display: flex; gap: 8px; }
   .controls button {
     font-size: 20px;
     padding: 8px 16px;
@@ -110,9 +109,9 @@
     <canvas id="game" width="640" height="384"></canvas>
     <div class="overlay" id="startScreen">
       <h1>무한 러너</h1>
-      <p>땅이 자동으로 다가와요. 방향키 또는 A/D로 이동, 스페이스바/W/↑로 점프!<br/>
-         구멍에 빠지거나, 가시·적에 부딪히거나, 화면 왼쪽으로 밀려나면 끝이에요.<br/>
-         동전을 모으고 최대한 오래 버텨보세요!</p>
+      <p>땅이 점점 더 빠르게 다가와요. 스페이스바 / W / ↑ 로 점프!<br/>
+         공중에서 한 번 더 누르면 2단 점프도 가능해요.<br/>
+         구멍에 빠지거나 가시·적에 부딪히면 끝이에요. 최대한 오래 버텨보세요!</p>
       <button id="startBtn">시작하기</button>
     </div>
     <div class="overlay hidden" id="gameOverScreen">
@@ -121,14 +120,10 @@
       <button id="retryBtn">다시 시작</button>
     </div>
   </div>
-  <div class="controls">
-    <div class="dpad">
-      <button id="btnLeft">◀</button>
-      <button id="btnRight">▶</button>
-    </div>
-    <button id="btnJump">⤒ 점프</button>
+  <div class="controls" style="justify-content:center;">
+    <button id="btnJump">⤒ 점프 (2단 점프 가능)</button>
   </div>
-  <div class="hint">방향키 / A D 이동 · 스페이스 / W / ↑ 점프 · 적은 밟아서 처치</div>
+  <div class="hint">스페이스 / W / ↑ 점프 · 공중에서 한 번 더 눌러 2단 점프 · 적은 밟아서 처치</div>
 </div>
 
 <script>
@@ -172,7 +167,6 @@
 
   var GRAVITY = 1700;
   var JUMP_VELOCITY = 620;
-  var MOVE_SPEED = 190;
   var ENEMY_SPEED = 60;
   var MAX_FALL = 900;
   var VIEW_W = 640;
@@ -180,14 +174,16 @@
   var ROWS = 12;
   var GROUND_TOP_ROW = 10;
   var GROUND_BOTTOM_ROW = 11;
+  var PLAYER_OFFSET_X = 130; // the player's screen x is locked this far from the camera's left edge
+  var MAX_JUMPS = 2; // double jump
 
   // the ground is generated forever, but only ever rendered/collided with
   // near the camera, so a fixed-size ring buffer (reused cyclically as the
   // world scrolls past) keeps memory bounded instead of growing without end
   var RING_TILES = 256;
 
-  var BASE_SCROLL = 70;     // px/s at the very start
-  var MAX_SCROLL = 175;     // px/s once fully ramped up (still just under MOVE_SPEED)
+  var BASE_SCROLL = 110;    // px/s at the very start
+  var MAX_SCROLL = 260;     // px/s once fully ramped up
   var DIFFICULTY_RAMP_TIME = 90; // seconds to reach max difficulty
   var LOOKAHEAD_TILES = 20; // keep this many tiles generated beyond the right edge
 
@@ -406,8 +402,8 @@
     camX = 0;
     ensureGenerated(LOOKAHEAD_TILES + Math.ceil(VIEW_W / TILE));
     player = {
-      x: 3 * TILE + 4, y: GROUND_TOP_ROW * TILE - 20, w: 22, h: 28,
-      vx: 0, vy: 0, onGround: false, facing: 1, animT: 0
+      x: PLAYER_OFFSET_X, y: GROUND_TOP_ROW * TILE - 20, w: 22, h: 28,
+      vy: 0, onGround: false, facing: 1, animT: 0, jumpsUsed: 0, jumpHeld: false
     };
   }
 
@@ -445,8 +441,6 @@
   // ---- input ----
   keys = {};
   var keyMap = {
-    ArrowLeft: "left", KeyA: "left",
-    ArrowRight: "right", KeyD: "right",
     ArrowUp: "jump", KeyW: "jump", Space: "jump"
   };
   window.addEventListener("keydown", function (e) {
@@ -469,8 +463,6 @@
     el.addEventListener("pointerleave", set(false));
     el.addEventListener("pointercancel", set(false));
   }
-  bindHold("btnLeft", "left");
-  bindHold("btnRight", "right");
   bindHold("btnJump", "jump");
 
   document.getElementById("startBtn").addEventListener("click", function () {
@@ -486,34 +478,28 @@
 
   // ---- update ----
   function updatePlayer(dt) {
-    var moving = false;
-    if (keys.left) { player.vx = -MOVE_SPEED; player.facing = -1; moving = true; }
-    else if (keys.right) { player.vx = MOVE_SPEED; player.facing = 1; moving = true; }
-    else { player.vx = 0; }
+    // no manual left/right anymore - the player is glued to a fixed spot on
+    // screen and the world scrolls underneath; only jump timing matters
+    player.x = camX + PLAYER_OFFSET_X;
 
-    if (keys.jump && player.onGround) {
+    var jumpPressed = keys.jump && !player.jumpHeld;
+    player.jumpHeld = keys.jump;
+    if (jumpPressed && (player.onGround || player.jumpsUsed < MAX_JUMPS)) {
       player.vy = -JUMP_VELOCITY;
       player.onGround = false;
+      player.jumpsUsed++;
       sfx.jump();
     }
 
     player.vy += GRAVITY * dt;
     if (player.vy > MAX_FALL) player.vy = MAX_FALL;
 
-    moveX(player, player.vx * dt);
     moveY(player, player.vy * dt);
+    if (player.onGround) player.jumpsUsed = 0;
 
-    // keep the player from simply outrunning the auto-scroll and vanishing
-    // off the right edge - there's some room to build a lead, but the world
-    // only ever generates/renders a bit ahead of the camera anyway
-    var maxLeadX = camX + VIEW_W * 0.55;
-    if (player.x > maxLeadX) player.x = maxLeadX;
-
-    if (moving) player.animT += dt;
-    else player.animT = 0;
+    player.animT += dt; // always running
 
     if (player.y > ROWS * TILE + 80) { die(); return; }
-    if (player.x + player.w < camX) { die(); return; }
 
     var prect = { x: player.x, y: player.y, w: player.w, h: player.h };
     for (var i = 0; i < coins.length; i++) {
