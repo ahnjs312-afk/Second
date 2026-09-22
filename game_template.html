@@ -153,10 +153,18 @@
   var CHAR_SRC = 25;
 
   var SPR = {
-    groundIsolated: [0, 0],
-    groundCapLeft: [1, 0],
-    groundMid: [2, 0],
-    groundCapRight: [3, 0],
+    // row 0: grass top with a border on every side, including the bottom -
+    // the "floating" piece for when nothing continues below it
+    topFloatIsolated: [0, 0],
+    topFloatCapLeft: [1, 0],
+    topFloatMid: [2, 0],
+    topFloatCapRight: [3, 0],
+    // row 1: grass top with no bottom border at all - the "connected" piece
+    // for when more ground continues directly below it
+    topIsolated: [0, 1],
+    topCapLeft: [1, 1],
+    topMid: [2, 1],
+    topCapRight: [3, 1],
     fillCore: [0, 6],
     bottomIsolated: [0, 7],
     bottomCapLeft: [1, 7],
@@ -200,23 +208,6 @@
   tilesetImg.src = "data:image/png;base64," + TILESET_B64;
   charsetImg.src = "data:image/png;base64," + CHARSET_B64;
 
-  // The tile art has softly rounded corners (a 1px transparent notch at each
-  // corner), so butting tiles flush against each other leaves tiny gaps that
-  // reveal the background. Sample each tile's own border color once assets
-  // are loaded so those corners can be backfilled before the art is drawn.
-  var tilesetSamplerCtx = null;
-  function sampleTilesetColor(sx, sy) {
-    if (!tilesetSamplerCtx) {
-      var c = document.createElement("canvas");
-      c.width = tilesetImg.naturalWidth;
-      c.height = tilesetImg.naturalHeight;
-      tilesetSamplerCtx = c.getContext("2d");
-      tilesetSamplerCtx.drawImage(tilesetImg, 0, 0);
-    }
-    var d = tilesetSamplerCtx.getImageData(sx, sy, 1, 1).data;
-    return "rgb(" + d[0] + "," + d[1] + "," + d[2] + ")";
-  }
-
   function parseLevel(rows) {
     var R = rows.length;
     var C = rows[0].length;
@@ -256,15 +247,6 @@
     off.height = lvl.R * TILE_ART;
     var octx = off.getContext("2d");
     octx.imageSmoothingEnabled = false;
-    // every rounded corner in the ground tileset is outlined in this same
-    // border color, so one sample backfills any of them safely
-    var borderColor = sampleTilesetColor(SPR.groundMid[0] * TILE_SRC + 1, SPR.groundMid[1] * TILE_SRC + 1);
-    // the top piece also has its own ~2px outline baked into its bottom edge
-    // (meant for it to stand alone); when another ground tile continues
-    // directly below, sample its interior fill so that outline can be
-    // painted over and the two rows read as one seamless block
-    var dirtColor = sampleTilesetColor(SPR.bottomMid[0] * TILE_SRC + 1, SPR.bottomMid[1] * TILE_SRC + 1);
-    var GROUND_BORDER_PX = 2;
 
     function pickPiece(set, leftSolid, rightSolid) {
       if (leftSolid && rightSolid) return set.mid;
@@ -272,7 +254,12 @@
       if (leftSolid && !rightSolid) return set.capRight;
       return set.isolated;
     }
-    var TOP_SET = { isolated: SPR.groundIsolated, capLeft: SPR.groundCapLeft, mid: SPR.groundMid, capRight: SPR.groundCapRight };
+    // the tileset ships a left-cap / middle / right-cap / isolated set for
+    // every combination of "does ground continue above/below this tile" -
+    // picking the matching piece makes every edge flush by construction, so
+    // there's nothing left over to paint or backfill
+    var TOP_FLOAT_SET = { isolated: SPR.topFloatIsolated, capLeft: SPR.topFloatCapLeft, mid: SPR.topFloatMid, capRight: SPR.topFloatCapRight };
+    var TOP_SET = { isolated: SPR.topIsolated, capLeft: SPR.topCapLeft, mid: SPR.topMid, capRight: SPR.topCapRight };
     var BOTTOM_SET = { isolated: SPR.bottomIsolated, capLeft: SPR.bottomCapLeft, mid: SPR.bottomMid, capRight: SPR.bottomCapRight };
 
     for (var r = 0; r < lvl.R; r++) {
@@ -283,32 +270,17 @@
         var leftSolid = c > 0 && lvl.solid[r][c - 1];
         var rightSolid = c < lvl.C - 1 && lvl.solid[r][c + 1];
 
-        // the tileset ships proper left-cap / middle / right-cap / isolated
-        // sets for BOTH the exposed top surface and the exposed underside
-        // (only their end pieces have rounded outer corners); a tile with
-        // ground on every side just uses the always-flush core fill piece
         var spr;
-        if (!above) spr = pickPiece(TOP_SET, leftSolid, rightSolid);
+        if (!above && !below) spr = pickPiece(TOP_FLOAT_SET, leftSolid, rightSolid);
+        else if (!above) spr = pickPiece(TOP_SET, leftSolid, rightSolid);
         else if (!below) spr = pickPiece(BOTTOM_SET, leftSolid, rightSolid);
         else spr = SPR.fillCore;
 
-        // backfill first, as a safety net for any edge (a cap's rounded
-        // outer corner, say) that still isn't flush against its neighbor
-        octx.fillStyle = borderColor;
-        octx.fillRect(c * TILE_ART, r * TILE_ART, TILE_ART, TILE_ART);
         octx.drawImage(
           tilesetImg,
           spr[0] * TILE_SRC, spr[1] * TILE_SRC, TILE_ART, TILE_ART,
           c * TILE_ART, r * TILE_ART, TILE_ART, TILE_ART
         );
-
-        if (!above && below) {
-          octx.fillStyle = dirtColor;
-          octx.fillRect(
-            c * TILE_ART, r * TILE_ART + TILE_ART - GROUND_BORDER_PX,
-            TILE_ART, GROUND_BORDER_PX
-          );
-        }
       }
     }
     return off;
