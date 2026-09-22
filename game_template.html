@@ -149,11 +149,19 @@
 
   var TILE = 32;
   var TILE_SRC = 19;
+  var TILE_ART = 18; // tile art is 18x18; the 19px stride leaves a 1px transparent gap
   var CHAR_SRC = 25;
 
   var SPR = {
-    groundTop: [0, 0],
-    groundFill: [0, 6],
+    groundIsolated: [0, 0],
+    groundCapLeft: [1, 0],
+    groundMid: [2, 0],
+    groundCapRight: [3, 0],
+    fillCore: [0, 6],
+    bottomIsolated: [0, 7],
+    bottomCapLeft: [1, 7],
+    bottomMid: [2, 7],
+    bottomCapRight: [3, 7],
     spike: [4, 3],
     coin: [11, 7],
     flagA: [11, 5],
@@ -192,6 +200,23 @@
   tilesetImg.src = "data:image/png;base64," + TILESET_B64;
   charsetImg.src = "data:image/png;base64," + CHARSET_B64;
 
+  // The tile art has softly rounded corners (a 1px transparent notch at each
+  // corner), so butting tiles flush against each other leaves tiny gaps that
+  // reveal the background. Sample each tile's own border color once assets
+  // are loaded so those corners can be backfilled before the art is drawn.
+  var tilesetSamplerCtx = null;
+  function sampleTilesetColor(sx, sy) {
+    if (!tilesetSamplerCtx) {
+      var c = document.createElement("canvas");
+      c.width = tilesetImg.naturalWidth;
+      c.height = tilesetImg.naturalHeight;
+      tilesetSamplerCtx = c.getContext("2d");
+      tilesetSamplerCtx.drawImage(tilesetImg, 0, 0);
+    }
+    var d = tilesetSamplerCtx.getImageData(sx, sy, 1, 1).data;
+    return "rgb(" + d[0] + "," + d[1] + "," + d[2] + ")";
+  }
+
   function parseLevel(rows) {
     var R = rows.length;
     var C = rows[0].length;
@@ -216,8 +241,77 @@
     }
     return {
       C: C, R: R, solid: solid, coins: coins, spikes: spikes,
-      enemiesInit: enemiesInit, flag: flag, spawn: spawn
+      enemiesInit: enemiesInit, flag: flag, spawn: spawn, bitmap: null
     };
+  }
+
+  function buildLevelBitmap(lvl) {
+    // Composite all ground tiles onto an offscreen canvas at native (unscaled)
+    // resolution first, then the whole thing is scaled up in one blit. Scaling
+    // each 18px tile up to 32px individually leaves hairline seams at tile
+    // edges (browser sampling rounds each drawImage call independently); a
+    // single blit of the assembled bitmap has no internal seams to round.
+    var off = document.createElement("canvas");
+    off.width = lvl.C * TILE_ART;
+    off.height = lvl.R * TILE_ART;
+    var octx = off.getContext("2d");
+    octx.imageSmoothingEnabled = false;
+    // every rounded corner in the ground tileset is outlined in this same
+    // border color, so one sample backfills any of them safely
+    var borderColor = sampleTilesetColor(SPR.groundMid[0] * TILE_SRC + 1, SPR.groundMid[1] * TILE_SRC + 1);
+    // the top piece also has its own ~2px outline baked into its bottom edge
+    // (meant for it to stand alone); when another ground tile continues
+    // directly below, sample its interior fill so that outline can be
+    // painted over and the two rows read as one seamless block
+    var dirtColor = sampleTilesetColor(SPR.bottomMid[0] * TILE_SRC + 1, SPR.bottomMid[1] * TILE_SRC + 1);
+    var GROUND_BORDER_PX = 2;
+
+    function pickPiece(set, leftSolid, rightSolid) {
+      if (leftSolid && rightSolid) return set.mid;
+      if (!leftSolid && rightSolid) return set.capLeft;
+      if (leftSolid && !rightSolid) return set.capRight;
+      return set.isolated;
+    }
+    var TOP_SET = { isolated: SPR.groundIsolated, capLeft: SPR.groundCapLeft, mid: SPR.groundMid, capRight: SPR.groundCapRight };
+    var BOTTOM_SET = { isolated: SPR.bottomIsolated, capLeft: SPR.bottomCapLeft, mid: SPR.bottomMid, capRight: SPR.bottomCapRight };
+
+    for (var r = 0; r < lvl.R; r++) {
+      for (var c = 0; c < lvl.C; c++) {
+        if (!lvl.solid[r][c]) continue;
+        var above = r > 0 && lvl.solid[r - 1][c];
+        var below = r < lvl.R - 1 && lvl.solid[r + 1][c];
+        var leftSolid = c > 0 && lvl.solid[r][c - 1];
+        var rightSolid = c < lvl.C - 1 && lvl.solid[r][c + 1];
+
+        // the tileset ships proper left-cap / middle / right-cap / isolated
+        // sets for BOTH the exposed top surface and the exposed underside
+        // (only their end pieces have rounded outer corners); a tile with
+        // ground on every side just uses the always-flush core fill piece
+        var spr;
+        if (!above) spr = pickPiece(TOP_SET, leftSolid, rightSolid);
+        else if (!below) spr = pickPiece(BOTTOM_SET, leftSolid, rightSolid);
+        else spr = SPR.fillCore;
+
+        // backfill first, as a safety net for any edge (a cap's rounded
+        // outer corner, say) that still isn't flush against its neighbor
+        octx.fillStyle = borderColor;
+        octx.fillRect(c * TILE_ART, r * TILE_ART, TILE_ART, TILE_ART);
+        octx.drawImage(
+          tilesetImg,
+          spr[0] * TILE_SRC, spr[1] * TILE_SRC, TILE_ART, TILE_ART,
+          c * TILE_ART, r * TILE_ART, TILE_ART, TILE_ART
+        );
+
+        if (!above && below) {
+          octx.fillStyle = dirtColor;
+          octx.fillRect(
+            c * TILE_ART, r * TILE_ART + TILE_ART - GROUND_BORDER_PX,
+            TILE_ART, GROUND_BORDER_PX
+          );
+        }
+      }
+    }
+    return off;
   }
 
   var levels = LEVELS_RAW.map(parseLevel);
@@ -538,21 +632,22 @@
   function updateCamera() {
     var target = player.x + player.w / 2 - VIEW_W / 2;
     var maxCam = Math.max(0, level.C * TILE - VIEW_W);
-    camX = Math.max(0, Math.min(target, maxCam));
+    camX = Math.floor(Math.max(0, Math.min(target, maxCam)));
   }
 
   // ---- render ----
-  function drawSprite(img, srcCoord, srcSize, dx, dy, dw, dh, flip) {
-    var sx = srcCoord[0] * srcSize;
-    var sy = srcCoord[1] * srcSize;
+  function drawSprite(img, srcCoord, stride, dx, dy, dw, dh, flip, cropSize) {
+    var size = cropSize || stride;
+    var sx = srcCoord[0] * stride;
+    var sy = srcCoord[1] * stride;
     if (flip) {
       ctx.save();
       ctx.translate(dx + dw, dy);
       ctx.scale(-1, 1);
-      ctx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, dw, dh);
+      ctx.drawImage(img, sx, sy, size, size, 0, 0, dw, dh);
       ctx.restore();
     } else {
-      ctx.drawImage(img, sx, sy, srcSize, srcSize, dx, dy, dw, dh);
+      ctx.drawImage(img, sx, sy, size, size, dx, dy, dw, dh);
     }
   }
 
@@ -582,33 +677,32 @@
   }
 
   function drawLevel() {
-    var c0 = Math.max(0, Math.floor(camX / TILE) - 1);
-    var c1 = Math.min(level.C - 1, Math.ceil((camX + VIEW_W) / TILE) + 1);
-    for (var r = 0; r < level.R; r++) {
-      for (var c = c0; c <= c1; c++) {
-        if (!level.solid[r][c]) continue;
-        var above = r > 0 ? level.solid[r - 1][c] : false;
-        var spr = above ? SPR.groundFill : SPR.groundTop;
-        drawSprite(tilesetImg, spr, TILE_SRC, c * TILE - camX, r * TILE, TILE, TILE, false);
-      }
-    }
+    if (!level.bitmap) level.bitmap = buildLevelBitmap(level);
+    var scale = TILE / TILE_ART;
+    var srcX = camX / scale;
+    var srcW = VIEW_W / scale;
+    ctx.drawImage(
+      level.bitmap,
+      srcX, 0, srcW, level.R * TILE_ART,
+      0, 0, VIEW_W, VIEW_H
+    );
     for (var i = 0; i < level.coins.length; i++) {
       var coin = level.coins[i];
       if (coin.taken) continue;
       var bob = Math.sin((performance.now() / 300) + coin.c) * 3;
       var cr = tileRect(coin.c, coin.r, 20, 20, false);
-      drawSprite(tilesetImg, SPR.coin, TILE_SRC, cr.x - camX, cr.y + bob, cr.w, cr.h, false);
+      drawSprite(tilesetImg, SPR.coin, TILE_SRC, cr.x - camX, cr.y + bob, cr.w, cr.h, false, TILE_ART);
     }
     for (var s = 0; s < level.spikes.length; s++) {
       var sp = level.spikes[s];
       var sr = tileRect(sp.c, sp.r, 24, 20, true);
-      drawSprite(tilesetImg, SPR.spike, TILE_SRC, sr.x - camX, sr.y, sr.w, sr.h, false);
+      drawSprite(tilesetImg, SPR.spike, TILE_SRC, sr.x - camX, sr.y, sr.w, sr.h, false, TILE_ART);
     }
     if (level.flag) {
       flagTime += 0;
       var frame = Math.floor(performance.now() / 400) % 2 === 0 ? SPR.flagA : SPR.flagB;
       var fr = tileRect(level.flag.c, level.flag.r, 26, 34, true);
-      drawSprite(tilesetImg, frame, TILE_SRC, fr.x - camX, fr.y, fr.w, fr.h, false);
+      drawSprite(tilesetImg, frame, TILE_SRC, fr.x - camX, fr.y, fr.w, fr.h, false, TILE_ART);
     }
   }
 
@@ -630,9 +724,9 @@
   function drawHUD() {
     for (var i = 0; i < MAX_LIVES; i++) {
       var spr = i < lives ? SPR.heartFull : SPR.heartEmpty;
-      drawSprite(tilesetImg, spr, TILE_SRC, 10 + i * 26, 10, 22, 22, false);
+      drawSprite(tilesetImg, spr, TILE_SRC, 10 + i * 26, 10, 22, 22, false, TILE_ART);
     }
-    drawSprite(tilesetImg, SPR.coin, TILE_SRC, VIEW_W - 90, 10, 20, 20, false);
+    drawSprite(tilesetImg, SPR.coin, TILE_SRC, VIEW_W - 90, 10, 20, 20, false, TILE_ART);
     ctx.fillStyle = "#1a2438";
     ctx.font = "bold 16px sans-serif";
     ctx.textBaseline = "middle";
