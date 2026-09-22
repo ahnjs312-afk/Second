@@ -153,7 +153,10 @@
   var CHAR_SRC = 25;
 
   var SPR = {
-    groundTop: [0, 0],
+    groundIsolated: [0, 0],
+    groundCapLeft: [1, 0],
+    groundMid: [2, 0],
+    groundCapRight: [3, 0],
     groundFill: [0, 6],
     spike: [4, 3],
     coin: [11, 7],
@@ -249,16 +252,31 @@
     off.height = lvl.R * TILE_ART;
     var octx = off.getContext("2d");
     octx.imageSmoothingEnabled = false;
-    var topColor = sampleTilesetColor(SPR.groundTop[0] * TILE_SRC + 1, SPR.groundTop[1] * TILE_SRC + 1);
+    var midColor = sampleTilesetColor(SPR.groundMid[0] * TILE_SRC + 1, SPR.groundMid[1] * TILE_SRC + 1);
     var fillColor = sampleTilesetColor(SPR.groundFill[0] * TILE_SRC + 1, SPR.groundFill[1] * TILE_SRC + 1);
     for (var r = 0; r < lvl.R; r++) {
       for (var c = 0; c < lvl.C; c++) {
         if (!lvl.solid[r][c]) continue;
         var above = r > 0 ? lvl.solid[r - 1][c] : false;
-        var spr = above ? SPR.groundFill : SPR.groundTop;
-        // backfill first so the tile's rounded corners don't reveal the sky
-        // through the gap when two tiles are placed flush against each other
-        octx.fillStyle = above ? fillColor : topColor;
+        var spr;
+        if (above) {
+          spr = SPR.groundFill;
+        } else {
+          // the tileset has a proper left-cap / middle / right-cap / isolated
+          // set for surface tiles (only their end pieces have rounded outer
+          // corners); pick the piece that matches how this run continues so
+          // interior tiles are flush by construction, not just backfilled
+          var leftSolid = c > 0 && lvl.solid[r][c - 1];
+          var rightSolid = c < lvl.C - 1 && lvl.solid[r][c + 1];
+          if (leftSolid && rightSolid) spr = SPR.groundMid;
+          else if (!leftSolid && rightSolid) spr = SPR.groundCapLeft;
+          else if (leftSolid && !rightSolid) spr = SPR.groundCapRight;
+          else spr = SPR.groundIsolated;
+        }
+        // backfill too, as a safety net for any edge (like a cap's rounded
+        // outer corner, or its non-flush bottom against the fill row below)
+        // that still isn't flush against its neighbor
+        octx.fillStyle = above ? fillColor : midColor;
         octx.fillRect(c * TILE_ART, r * TILE_ART, TILE_ART, TILE_ART);
         octx.drawImage(
           tilesetImg,
