@@ -12,14 +12,15 @@ st.set_page_config(page_title="픽셀 플랫포머", page_icon="🎮", layout="c
 ASSETS_DIR = Path(__file__).parent / "assets"
 
 
-@st.cache_data
 def load_b64(filename):
     data = (ASSETS_DIR / filename).read_bytes()
     return base64.b64encode(data).decode("ascii")
 
 
-@st.cache_data
 def build_game_html():
+    # Not cached on purpose: game_template.html and the assets are read fresh
+    # every rerun (they're tiny, so this costs nothing) so an edit to the
+    # template always shows up without needing to clear a stale cache.
     template = (Path(__file__).parent / "game_template.html").read_text(encoding="utf-8")
     html = template.replace("__TILESET_B64__", load_b64("tilemap.png"))
     html = html.replace("__CHARSET_B64__", load_b64("tilemap-characters.png"))
